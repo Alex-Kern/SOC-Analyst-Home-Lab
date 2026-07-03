@@ -6,7 +6,7 @@ Isolated local virtualization laboratory for security analysis.
 By Alexander Kern
 
 ## Executive Summary
-This repository documents the structural engineering, deployment, and operation of an isolated local virtualization laboratory used to model host-level defensive baselines, command-line system analysis, and transport-layer security protocols.
+This repository contains my active home lab environment used to test host security, analyze network traffic, and practice command-line diagnostics.
 
 ## Architecture Specifications
 * Hypervisor: Oracle VirtualBox 7.2.12
