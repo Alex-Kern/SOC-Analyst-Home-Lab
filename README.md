@@ -14,7 +14,7 @@ This repository contains my active home lab environment used to test host securi
 * Linux Terminal (Attack/Audit Source): Ubuntu Desktop (22.04.5 LTS)
 * Target Windows Server (Defensive Host): Windows Server 2022
 * Networking Profile: Private NAT Network Subnet (10.0.2.0/24)
-![Network Topology Diagram](./images/Network_Topology.png)
+![Network Topology Diagram](./images/Network Topology.png)
 
 ## Structural Exercises Documented
 1. Private network configuration and host connection tracking.
@@ -65,4 +65,4 @@ This tracking process allows an analyst to look at an unrecognized connection, f
    * On Linux, querying `ps -p [PID]` unmasks the binary origin path, allowing an analyst to verify if a socket belongs to an approved system daemon or an unauthorized process.
 
 ## Note on Service Management: Practiced starting, inspecting, and terminating native local services programmatically via `systemctl` on Linux and `Stop-Service` / `Get-Service`
-on Windows Server to simulate service-layer incident response.
+    on Windows Server to simulate service-layer incident response.
