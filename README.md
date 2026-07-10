@@ -14,7 +14,7 @@ This repository contains my active home lab environment used to test host securi
 * Linux Terminal (Attack/Audit Source): Ubuntu Desktop (22.04.5 LTS)
 * Target Windows Server (Defensive Host): Windows Server 2022
 * Networking Profile: Private NAT Network Subnet (10.0.2.0/24)
-![Network Topology Diagram](./images/Network Topology.png)
+![Network Topology Diagram](./images/Network_Topology.png)
 
 ## Structural Exercises Documented
 1. Private network configuration and host connection tracking.
