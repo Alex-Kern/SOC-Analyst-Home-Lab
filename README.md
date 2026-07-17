@@ -67,16 +67,19 @@ This tracking process allows an analyst to look at an unrecognized connection, f
 ### 3. Note on Service Management
 Practiced starting, inspecting, and terminating native local services programmatically via `systemctl` on Linux and `Stop-Service` / `Get-Service` on Windows Server to simulate service-layer incident response.
 
-### 4. SIEM Operations: Log Ingestion & Query-Driven Event Triage
+## 4. SIEM Operations: Log Ingestion & Query-Driven Event Triage
 
 ### Objective
-To move beyond isolated host analysis, I deployed **Splunk Enterprise** on my Windows Server VM to serve as my central Security Information and Event Management (SIEM) brain. The goal was to establish a persistent local security pipeline, simulate a targeted credential attack, and use Splunk's Search Processing Language (SPL) to reconstruct the event timeline.
+To move beyond isolated host analysis, I deployed **Splunk Enterprise** on my Windows Server VM to act as my central SIEM platform. The goal was to build a local log ingestion pipeline, simulate a credential brute-force attack, and use Splunk's Search Processing Language (SPL) to reconstruct the event timeline.
 
 ### Log Ingestion Architecture
-To configure local data inputs without complex enterprise forwarding infrastructure, I mapped a direct ingestion pipeline on the standalone instance:
-1. **Target Channel:** `Local event log collection`
-2. **Monitored Logs:** Windows `Security` and `System` channels
-3. **Storage Destination:** Splunk's default database index (`index="main"`)
+Setting up the data input actually tripped me up more than I expected. I went into Splunk's **Settings > Data Inputs** looking for local event log collection, and my first instinct was to click into **Forwarded Inputs** and click on Windows Event Logs, since that sounded the most like what I wanted to look at in the list. That's meant for receiving logs shipped over from other Splunk forwarders though, not for pulling logs off the local machine itself, so nothing showed up when I tried to configure it that way. After poking around for a bit I found the right section under **Local Inputs > Local Event Log Collections**, which is what actually lets Splunk read straight from the Windows Event Log service on the same box.
+
+Once that was sorted, the setup was simple:
+- **Monitored Logs:** Windows `Security` and `System` channels
+- **Storage Destination:** Splunk's default index (`index="main"`)
+
+Since this is a standalone VM with no forwarders in the environment, everything stays local, no distributed collection needed:
 
 ```text
 +-----------------------+      Local Event Ingestion      +----------------------------+
@@ -86,36 +89,32 @@ To configure local data inputs without complex enterprise forwarding infrastruct
 ```
 
 ### Attack Simulation
-To test the pipeline and generate realistic alert telemetry, I locked the Windows Server VM session and intentionally ran a simulated credential brute-force attack. I generated 6 rapid, consecutive failed logins utilizing randomized, non-existent passwords to create anomalous authentication noise.
+To generate some real telemetry to chase down, I locked the Windows Server VM and ran a simulated brute-force attempt, with 6 consecutive failed logins at the lock screen using random passwords, just to throw some noise into the security logs.
 
 ### Event Triage & SPL Analysis
-After logging back into the server, I accessed the Splunk Search and Reporting application and wrote specific queries to reconstruct the threat timeline.
+After logging back in, I opened up Splunk's Search and Reporting app and started digging.
 
-**Step 1: Isolating the Anomalous Authentication Spike**
+**Step 1: Isolating the failed logins**
 
-I searched the Security log channel using Windows EventCode 4625 (Anomalous Failed Windows Logins) to extract the attack footprint:
+I searched for EventCode 4625 (failed Windows logins) to pull the attack footprint out of the noise:
 
 ```spl
 index="main" EventCode=4625
 ```
 
-The SIEM successfully filtered and correlated the raw system logs and displayed a massive, rapid spike of authentication failures within a single minute window.
-
 ![Splunk Failed Login Query Output](./images/splunk_failed_logins.png)
 
-- **Key Evidence Captured:** The parsed logs isolated the target account name Administrator, identified the local workstation host generating the failures, and provided the precise millisecond timestamps of the automated attack.
+This filtered down to a tight cluster of failures, all within about a minute — targeting the `Administrator` account, from the local workstation, with timestamps lining up exactly with when I ran the simulation.
 
-**Step 2: Verification of Attack Success**
+**Step 2: Checking whether it actually got in**
 
-To verify if the threat actor successfully gained unauthorized access, I dynamically pivoted my query to filter for EventCode 4624 (Successful Windows Logins) within the exact same chronological time window:
+Next question was obvious: did any of those attempts succeed? I pivoted the query to EventCode 4624 (successful logins) over the same time window:
 
 ```spl
 index="main" EventCode=4624
 ```
 
-- **Mitigation Verification:** Cross-referencing the logs confirmed that no successful logins occurred for the target test accounts during or immediately after the attack sequence, proving the defense-in-depth security boundary successfully mitigated the intrusion attempt.
+Nothing came back for `Administrator` during that window, so the attack failed to get through, which is what I wanted to confirm.
 
-### My Takeaways & Applied Blue-Team Lessons
-
-- **Enterprise Visibility:** This shows that modern security organizations rely heavily on centralized logging. Instead of manually scrolling through thousands of lines of local event viewers on individual machines, a SIEM aggregates endpoints into a single, queryable dashboard.
-- **Proactive Defenses:** By getting familiar with these SPL parameters, I learned how SOC analysts create customized, automated rules. In a production network, this specific search query would be configured as a high-priority alert to automatically isolate a host's network port if more than 5 failed logins occur within 30 seconds.
+### Takeaways
+Getting the data input wrong at first was honestly a useful mistake. It made me actually understand the difference between forwarded and local inputs instead of just following a checklist. Beyond that, this lab made it clear why SOCs lean so heavily on centralized logging: instead of scrolling through Event Viewer on individual boxes, everything lands in one searchable place. And once I had the query working, it wasn't hard to see how something like this would get turned into a real alert — flag anything with 5+ failed logins in 30 seconds and auto-isolate the host.
