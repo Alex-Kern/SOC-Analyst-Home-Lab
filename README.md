@@ -20,7 +20,7 @@ LAN (em1): Linux Production Zone (192.168.1.0/24, Gateway: 192.168.1.1)
 OPT1 (em2): Windows Defensive DMZ (192.168.2.0/24, Gateway: 192.168.2.1)
   * Note: Early diagnostic screenshots in this repo (Section 2) were captured during the initial flat-network phase, before pfSense segmentation was introduced in Section 5. IP addressing changed from the original `10.0.2.x` range to `192.168.1.x` / `192.168.2.x` once the segmented topology was deployed.
 
-![Network Topology Diagram](./images/Network_Topology_Complete.png)
+
 
 ## Structural Exercises Documented
 1. Private network configuration and host connection tracking.
