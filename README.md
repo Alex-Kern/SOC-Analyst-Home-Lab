@@ -9,12 +9,18 @@ By Alexander Kern
 This repository contains my active home lab environment used to test host security, analyze network traffic, and practice command-line diagnostics.
 
 ## Architecture Specifications
-* Hypervisor: Oracle VirtualBox 7.2.12
-* Host Operating System: Windows 11 (64-bit)
-* Linux Terminal (Attack/Audit Source): Ubuntu Desktop (22.04.5 LTS)
-* Target Windows Server (Defensive Host): Windows Server 2022
-* Networking Profile: Private NAT Network Subnet (10.0.2.0/24)
-![Network Topology Diagram](./images/Network_Topology.png)
+* **Hypervisor:** Oracle VirtualBox 7.2.12
+* **Host Operating System:** Windows 11 (64-bit)
+* **Virtual Firewall:** pfSense Community Edition (CE)
+* **Linux Production Host (Audit/Attack Source):** Ubuntu Desktop (22.04.5 LTS) — `10.0.2.100/24`
+* **Windows DMZ Host (Defensive Target & SIEM):** Windows Server 2022 — `10.0.3.100/24`
+* **Networking Profile:** Multi-Zone Segmented Architecture (pfSense Routed Gateway)
+  * **WAN (`em0`):** Upstream VirtualBox NAT (`10.0.2.15/24`)
+  * **LAN (`em1`):** Linux Production Zone (`10.0.2.0/24`, Gateway: `10.0.2.1`)
+  * **OPT1 (`em2`):** Windows Defensive DMZ (`10.0.3.0/24`, Gateway: `10.0.3.1`)
+  * Note: Early diagnostic screenshots in this repo (Section 2) were captured during the initial flat-network phase, before pfSense segmentation was introduced in Section 5. IP addressing changed from the original `10.0.2.x` range to `192.168.1.x` / `192.168.2.x` once the segmented topology was deployed.
+
+![Network Topology Diagram](./images/Network_Topology_Complete.png)
 
 ## Structural Exercises Documented
 1. Private network configuration and host connection tracking.
@@ -118,3 +124,65 @@ Nothing came back for `Administrator` during that window, so the attack failed t
 
 ### Takeaways
 Getting the data input wrong at first was honestly a useful mistake. It made me actually understand the difference between forwarded and local inputs instead of just following a checklist. Beyond that, this lab made it clear why SOCs lean so heavily on centralized logging: instead of scrolling through Event Viewer on individual boxes, everything lands in one searchable place. And once I had the query working, it wasn't hard to see how something like this would get turned into a real alert — flag anything with 5+ failed logins in 30 seconds and auto-isolate the host.
+
+---
+
+## 5. Enterprise Perimeter Defense: pfSense Firewall & Network Segmentation
+
+### Objective
+To eliminate the single flat subnet limitation and introduce enterprise-grade perimeter control, I deployed a **pfSense Community Edition (CE)** virtual firewall. This upgrade transitions the lab from an unmonitored local switch layout into a routed, segmented multi-zone environment with boundary controls.
+
+### Infrastructure & Topology Evolution
+
+In the baseline lab, all virtual machines sat on one flat subnet with no transit filtering or boundary policy in place. To simulate an enterprise setup, I brought in pfSense as a multi-homed gateway and split the environment into three zones:
+
+1. **WAN Zone (`em0`):** Connected via VirtualBox NAT to provide controlled upstream Internet access and package retrieval.
+2. **Linux Production Zone (`em1` - `192.168.1.0/24`):** Isolated internal network hosting the Ubuntu Desktop (Attack/Audit Source). Default gateway set to `192.168.1.1`.
+3. **Windows Defensive DMZ Zone (`em2` - `192.168.2.0/24`):** Isolated internal network hosting the Windows Server 2022 target host and Splunk SIEM deployment. Default gateway set to `192.168.2.1`.
+
+![Segmented Network Topology Diagram](./images/Network_Topology_Complete.png)
+
+### pfSense Deployment & Interface Mapping
+
+This is where I hit my first real "oh, that's why" moment of the lab. In the old flat-network setup, boot order never mattered, so I just started whatever VM I felt like. With pfSense in the mix that habit bit me. If Windows Server or Ubuntu came up before pfSense was actually routing, they'd either fail to grab an IP or hang onto a stale lease from the old flat network. I'd log into Windows Server, run `ipconfig`, and get nothing useful back, no gateway, wrong subnet, sometimes no address at all.
+
+Booting pfSense first and letting it fully settle fixed most of that, but not all of it. Windows Server in particular liked to hold onto its old network config even after pfSense was up, so I'd still have to go release/renew the adapter manually, or in a couple cases just disable/re-enable the NIC, before it would grab a lease from the new `192.168.2.0/24` scope. Small thing, but it cost more time than I expected.
+
+Once that was sorted, mapping VirtualBox's adapters to pfSense's interfaces was the easy part:
+
+| VirtualBox Adapter | pfSense Interface | Assigned IP | Purpose |
+|---|---|---|---|
+| Adapter 1 (`em0`) | WAN | DHCP via NAT | Upstream Internet access |
+| Adapter 2 (`em1`) | LAN | `192.168.1.1/24` | Linux Production Gateway |
+| Adapter 3 (`em2`) | OPT1 | `192.168.2.1/24` | Windows DMZ Gateway |
+
+### Firewall Policy Configuration & Rule Verification
+
+To show active boundary enforcement, I set up stateful firewall rules in pfSense to restrict traffic between the **Linux Production Zone (`192.168.1.0/24`)** and the **Windows DMZ Zone (`192.168.2.0/24`)**.
+
+#### 1. Pre-Rule Baseline Audit
+Before applying any restrictive rules, I ran a port scan from the Ubuntu terminal across the gateway to see what was open on the Windows Server host (`192.168.2.10`).
+
+* **Result:** Nothing was filtered, including legacy plaintext management ports like Port 23 (Telnet) sitting wide open alongside the standard service ports.
+
+![Pre-Rule Baseline Network Scan](./images/Pre_Rule_Baseline_Scan.png)
+
+#### 2. Firewall Rule Enforcement
+I added a rule on the **LAN (`em1`)** interface:
+* **Action:** `Block` / `Reject`
+* **Protocol:** `TCP`
+* **Source:** `Linux Production Subnet (192.168.1.0/24)`
+* **Destination:** `Windows DMZ Subnet (192.168.2.0/24)`
+* **Destination Port:** `23 (Telnet)`
+
+#### 3. Post-Rule Boundary Testing
+With the rule active, I repeated the same connection attempt from the audit host to confirm it actually worked.
+
+* **Result:** The firewall caught the traffic on Port 23 and dropped it at the gateway before it ever reached the target host.
+
+![Post-Rule Telnet Connection Blocked](./images/Post-Rule_Telnet_Blocked.png)
+
+### Takeaways
+Honestly the boot-order thing annoyed me way more than it should have, but it taught me something a flat network never would've: once you segment things, the firewall has to come up first or literally nothing else on the network works right. And then actually seeing the Telnet block happen, wide open, then blocked, right there in the same test, was pretty satisfying. Reading about DMZs never really landed for me until I watched one actually do its job.
+
+---
