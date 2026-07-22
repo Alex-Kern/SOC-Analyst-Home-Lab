@@ -8,19 +8,20 @@ By Alexander Kern
 ## Executive Summary
 This repository contains my active home lab environment used to test host security, analyze network traffic, and practice command-line diagnostics.
 
-Architecture Specifications
-Hypervisor: Oracle VirtualBox 7.2.12
-Host Operating System: Windows 11 (64-bit)
-Virtual Firewall: pfSense Community Edition (CE)
-Linux Production Host (Audit/Attack Source): Ubuntu Desktop (22.04.5 LTS) — 192.168.1.100/24
-Windows DMZ Host (Defensive Target & SIEM): Windows Server 2022 — 192.168.2.10/24
-Networking Profile: Multi-Zone Segmented Architecture (pfSense Routed Gateway)
-WAN (em0): Upstream VirtualBox NAT
-LAN (em1): Linux Production Zone (192.168.1.0/24, Gateway: 192.168.1.1)
-OPT1 (em2): Windows Defensive DMZ (192.168.2.0/24, Gateway: 192.168.2.1)
-  * Note: Early diagnostic screenshots in this repo (Section 2) were captured during the initial flat-network phase, before pfSense segmentation was introduced in Section 5. IP addressing changed from the original `10.0.2.x` range to `192.168.1.x` / `192.168.2.x` once the segmented topology was deployed.
+### Architecture Specifications
+- **Hypervisor:** Oracle VirtualBox 7.2.12
+- **Host Operating System:** Windows 11 (64-bit)
+- **Virtual Firewall:** pfSense Community Edition (CE)
+- **Linux Production Host (Audit/Attack Source):** Ubuntu Desktop (22.04.5 LTS) — `192.168.1.100/24`
+- **Windows DMZ Host (Defensive Target & SIEM):** Windows Server 2022 — `192.168.2.10/24`
+- **Networking Profile:** Multi-Zone Segmented Architecture (pfSense Routed Gateway)
+  - WAN (em0): Upstream VirtualBox NAT
+  - LAN (em1): Linux Production Zone (`192.168.1.0/24`, Gateway: `192.168.1.1`)
+  - OPT1 (em2): Windows Defensive DMZ (`192.168.2.0/24`, Gateway: `192.168.2.1`)
 
+> **Note:** Early diagnostic screenshots in this repo (Section 2) were captured during the initial flat-network phase, before pfSense segmentation was introduced in Section 5. IP addressing changed from the original `10.0.2.x` range to `192.168.1.x` / `192.168.2.x` once the segmented topology was deployed.
 
+![Network Topology Diagram](./images/Network_Topology_Complete.drawio.png)
 
 ## Structural Exercises Documented
 1. Private network configuration and host connection tracking.
@@ -140,7 +141,7 @@ In the baseline lab, all virtual machines sat on one flat subnet with no transit
 2. **Linux Production Zone (`em1` - `192.168.1.0/24`):** Isolated internal network hosting the Ubuntu Desktop (Attack/Audit Source). Default gateway set to `192.168.1.1`.
 3. **Windows Defensive DMZ Zone (`em2` - `192.168.2.0/24`):** Isolated internal network hosting the Windows Server 2022 target host and Splunk SIEM deployment. Default gateway set to `192.168.2.1`.
 
-![Segmented Network Topology Diagram](./images/Network_Topology_Complete.png)
+![Network Topology Diagram](./images/Network_Topology_Complete.drawio.png)
 
 ### pfSense Deployment & Interface Mapping
 
