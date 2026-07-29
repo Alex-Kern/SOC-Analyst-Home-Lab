@@ -187,3 +187,103 @@ With the rule active, I repeated the same connection attempt from the audit host
 Honestly the boot-order thing annoyed me way more than it should have, but it taught me something a flat network never would've: once you segment things, the firewall has to come up first or literally nothing else on the network works right. And then actually seeing the Telnet block happen, wide open, then blocked, right there in the same test, was pretty satisfying. Reading about DMZs never really landed for me until I watched one actually do its job.
 
 ---
+
+## 6. Enterprise Directory Services & Host Hardening: Active Directory, GPO, & Lockout Telemetry
+
+### Objective
+To move past a flat, unmanaged network and actually get some centralized identity control going, I promoted the Windows Server 2022 VM to an **Active Directory Domain Controller (AD DC)** for the `cyberlab.local` domain. From there I built out custom OUs, pushed GPOs to enforce password rules and kill off legacy protocols, and then spent way longer than I expected chasing down the actual Splunk telemetry to prove any of it worked.
+
+---
+
+### Identity Architecture & Directory Structure
+
+Instead of dumping everything into the default `Users` container like AD wants you to, I built a custom OU structure so things followed least-privilege from the start:
+
+```text
+cyberlab.local (Domain Root)
+└── SOC_Lab (Custom Parent OU)
+    ├── Lab_Users (User Accounts Container)
+    │   ├── test_user_weak   (Non-compliant / Policy testing target)
+    │   └── test_user_strong (Compliant identity object)
+    └── Lab_Workstations (Managed Endpoints Container)
+```
+
+![AD OU Structure](./images/AD_OU_Structure.png)
+*Custom OU hierarchy under `SOC_Lab`, with `Lab_Users` and `Lab_Workstations` split out.*
+
+- **Domain Controller Promotion:** Promoted the host to `cyberlab.local` with integrated DNS. I got the standard DNS delegation warning during promo and just ignored it — this is an isolated lab domain, there's no parent zone to delegate to.
+- **Account Creation:** Set up `test_user_weak` and `test_user_strong` inside `SOC_Lab > Lab_Users` so I'd have one identity that should fail policy checks and one that should pass.
+
+---
+
+### Group Policy Enforcement (`GPO_Endpoint_Hardening`)
+
+I built a single GPO called `GPO_Endpoint_Hardening` to cover both password/lockout rules and a legacy protocol kill switch, and (eventually) linked it at the domain root — more on why "eventually" matters below.
+
+#### 1. Baseline Password & Account Lockout Policies
+Set under `Computer Configuration > Policies > Windows Settings > Security Settings > Account Policies`:
+
+| Setting | Value |
+|---|---|
+| Minimum Password Length | 14 characters |
+| Password Complexity | Enabled |
+| Account Lockout Threshold | 5 invalid logon attempts |
+
+![GPO Password Policy](./images/GPO_Password_Policy.png)
+*Password length, complexity, and lockout threshold as configured in the Group Policy Management Editor.*
+
+One annoying thing here: I wanted to view the Password Policy and Account Lockout Policy settings side-by-side while I was documenting this, and the GPMC editor (`gpmc.msc`) just won't do it. It treats `Account Policies` as a container, and the sub-folders don't expand into one pane — you're stuck clicking back and forth between them to see everything at once. Not a technical problem, just genuinely annoying when you're trying to get clean screenshots of a config that logically belongs together.
+
+I also tried switching to the **Settings** tab in GPMC to pull a clean HTML summary report instead of screenshotting the editor, and got hit with an Internet Explorer security popup saying "Content within this application is blocked." Turns out Windows Server blocks its own internal GPMC reporting engine by default — you have to manually go add `about:security_gpmc.msc` as a trusted site before it'll render.
+
+#### 2. Disabling Legacy Protocols (SMBv1 via GPO Registry)
+To close off an easy lateral movement path (EternalBlue-style stuff), I pushed SMBv1 off via a GPO registry preference instead of relying on people remembering to disable it manually:
+
+| Field | Value |
+|---|---|
+| Key Path | `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters` |
+| Value Name | `SMB1` |
+| Value Type | `REG_DWORD` |
+| Value Data | `0` (Disabled) |
+
+![GPO SMBv1 Disabled](./images/GPO_SMBv1_Disabled.png)
+*Registry preference pushing SMBv1 off domain-wide.*
+
+---
+
+### Policy Verification & Splunk Telemetry Ingestion
+
+#### 1. Non-Compliant Password Rejection
+To sanity check the password policy actually landed, I tried resetting `test_user_weak`'s password to something short — `12345`, 5 characters — through `dsa.msc`. AD rejected it immediately for failing length/complexity. Good sign.
+
+#### 2. Brute-Force Simulation & Account Lockout
+Next I wanted to actually trip the lockout and get it logged:
+
+1. Ran `gpupdate /force` to push the policy down.
+2. Went to the lock screen and started throwing bad passwords at `CYBERLAB\test_user_weak`.
+3. On the 5th wrong attempt, Windows locked it out: "The referenced account is currently locked out and may not be logged on to."
+
+#### 3. SIEM Triage & Event Code Resolution — and where it actually got interesting
+Back in Splunk (`http://localhost:8000`), I ran:
+
+```spl
+index="main" (EventCode=4625 OR EventCode=4740)
+```
+
+EventCode 4625 (failed logons) showed up instantly — no surprise, that logs by default. But EventCode 4740, the actual account lockout event, was just... not there. At all.
+
+Took a bit to figure out why, and honestly there were a few overlapping issues that made it confusing to debug:
+
+- **AD doesn't audit account management events out of the box.** You have to explicitly turn that on.
+- **I'd linked the GPO to my custom `SOC_Lab` OU, not the domain root**, and that OU-level policy wasn't overriding the Default Domain Policy that actually governs the DC's own account lockout behavior.
+- **On top of that, at some point the lockout threshold itself had quietly reverted** — I checked back and it was sitting at unlimited attempts instead of the 5 I'd originally set. I'm still not entirely sure what caused it (possibly policy conflict/refresh weirdness from linking at the wrong OU level), but I noticed it, reset it back to 5, and re-verified. Worth mentioning because for a bit I thought my audit policy fix alone had solved everything, when really the threshold silently resetting was part of why lockout wasn't triggering consistently in the first place.
+
+The actual fix ended up being a few things stacked together: relink `GPO_Endpoint_Hardening` to the root domain (`cyberlab.local`) instead of the sub-OU, explicitly enable **Audit User Account Management** (Success and Failure) under Advanced Audit Policy Configuration, and confirm the lockout threshold was actually still set to 5 and not silently reverted. Once all three were sorted and I re-ran the lockout test, 4740 finally showed up in Splunk correlated right alongside the 4625 attempts.
+
+![Splunk Account Lockout](./images/Splunk_Account_Lockout.png)
+*EventCode 4625 (failed logons) and EventCode 4740 (account lockout) correlated for `test_user_weak` in Splunk.*
+
+---
+
+### Takeaways
+This section is where I learned that "the policy applied" and "the policy is actually auditing and logging" are two completely different problems. I assumed linking a GPO anywhere in the tree would eventually bubble up and that basic security auditing was on by default — neither was true, and the missing 4740 event was the thing that forced me to actually understand GPO inheritance and audit policy instead of just clicking through it.
